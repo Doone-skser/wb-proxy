@@ -1,0 +1,9 @@
+# 凭据与本地状态, 绝不提交
+auth.json
+*.log
+.wb-proxy/
+last-request.json
+
+# 系统/编辑器
+.DS_Store
+node_modules/
