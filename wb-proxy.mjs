@@ -19,12 +19,14 @@ import { exec } from 'node:child_process';
 const ENDPOINT = process.env.WB_ENDPOINT || 'https://www.workbuddy.ai';
 const PREFIX = '/v2/plugin';
 const CHAT_URL = `${ENDPOINT}/v2/chat/completions`;
-const DEFAULT_MODEL = 'deepseek-v4.1-flash';
+const DEFAULT_MODEL = process.env.WB_DEFAULT_MODEL || 'deepseek-v4.1-flash';
 // 当前 WorkBuddy 限时免费(credit=0)的模型; step-5-preview 促销 2026-10-26 截止, 其余到 2026-11-01
-const FREE_MODELS = ['deepseek-v4.1-flash', 'hy3', 'step-5-preview'];
-const PAID_MODELS = ['deepseek-v4.1-flash-sg'];
+const IS_CN = new URL(ENDPOINT).hostname.endsWith('workbuddy.cn');
+const parseModels = (v, fallback) => (v ?? fallback).split(',').map(s => s.trim()).filter(Boolean);
+const FREE_MODELS = parseModels(process.env.WB_FREE_MODELS, 'deepseek-v4.1-flash,hy3,step-5-preview');
+const PAID_MODELS = parseModels(process.env.WB_PAID_MODELS, IS_CN ? '' : 'deepseek-v4.1-flash-sg');
 const AUTH_DIR = path.join(os.homedir(), '.wb-proxy');
-const AUTH_FILE = path.join(AUTH_DIR, 'auth.json');
+const AUTH_FILE = process.env.WB_AUTH_FILE || path.join(AUTH_DIR, 'auth.json');
 
 // ---------------- 弹性网络层 ----------------
 // 本机若有 fake-ip 模式 VPN(Clash/Surge 等), 系统 DNS 会返回 198.18.x.x 假地址,
@@ -112,7 +114,7 @@ function loadAuth() {
 }
 
 function saveAuth(a) {
-  fs.mkdirSync(AUTH_DIR, { recursive: true });
+  fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true });
   fs.writeFileSync(AUTH_FILE, JSON.stringify(a, null, 2), { mode: 0o600 });
 }
 
