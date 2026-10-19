@@ -28,6 +28,18 @@ node wb-proxy.mjs serve --port 8377
 node wb-proxy.mjs serve --host 0.0.0.0 --port 18777 --key <你的密钥>
 ```
 
+默认使用国际版 `https://www.workbuddy.ai`。国内版账号可通过环境变量切换到 `https://www.workbuddy.cn`，两种区域的登录凭据互不通用：
+
+```bash
+# Windows PowerShell
+$env:WB_ENDPOINT = "https://www.workbuddy.cn"
+$env:WB_AUTH_FILE = "$HOME\\.wb-proxy\\auth-cn.json"
+node wb-proxy.mjs login
+node wb-proxy.mjs serve --port 8377
+```
+
+国内版目前提供 `deepseek-v4.1-flash`、`hy3` 和 `step-5-preview`；`deepseek-v4.1-flash-sg` 不适用于国内版。`WB_AUTH_FILE` 用于让国内版和国际版使用不同的登录凭据；不设置时仍使用原来的 `~/.wb-proxy/auth.json`。未设置 `WB_ENDPOINT` 时，国际版行为保持不变。
+
 ## 端点
 
 - `POST /v1/chat/completions` — OpenAI Chat Completions(流式/非流式都支持)
