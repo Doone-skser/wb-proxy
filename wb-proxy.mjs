@@ -20,11 +20,37 @@ const ENDPOINT = process.env.WB_ENDPOINT || 'https://www.workbuddy.ai';
 const PREFIX = '/v2/plugin';
 const CHAT_URL = `${ENDPOINT}/v2/chat/completions`;
 const DEFAULT_MODEL = process.env.WB_DEFAULT_MODEL || 'deepseek-v4.1-flash';
-// 当前 WorkBuddy 限时免费(credit=0)的模型; step-5-preview 促销 2026-10-26 截止, 其余到 2026-11-01
-const IS_CN = new URL(ENDPOINT).hostname.endsWith('workbuddy.cn');
-const parseModels = (v, fallback) => (v ?? fallback).split(',').map(s => s.trim()).filter(Boolean);
-const FREE_MODELS = parseModels(process.env.WB_FREE_MODELS, 'deepseek-v4.1-flash,hy3,step-5-preview');
-const PAID_MODELS = parseModels(process.env.WB_PAID_MODELS, IS_CN ? '' : 'deepseek-v4.1-flash-sg');
+// WorkBuddy 国际版完整模型目录(2026-10-20 快照, credits=x0.00 为限时免费)
+const MODELS = [
+  { id: 'deepseek-v4.1-flash',    credits: 'x0.00', free: true,  note: 'DeepSeek 旗舰, 1M 上下文, 免费至 2026-11-01' },
+  { id: 'hy3',                    credits: 'x0.00', free: true,  note: '腾讯混元思考模型, 免费至 2026-11-01' },
+  { id: 'step-5-preview',         credits: 'x0.00', free: true,  note: '阶跃星辰旗舰, 免费至 2026-10-26' },
+  { id: 'deepseek-v4.1-flash-sg', credits: 'x0.03', free: false, note: 'DeepSeek 付费通道(新加坡), 免费通道限流时的备胎' },
+  { id: 'glm-5.3-flash',          credits: 'x0.08', free: false },
+  { id: 'minimax-m3.1-flash',     credits: 'x0.08', free: false },
+  { id: 'gpt-6-luna',             credits: 'x0.07', free: false },
+  { id: 'gpt-5.6-luna',           credits: 'x0.14', free: false },
+  { id: 'hy4-preview',            credits: 'x0.29', free: false },
+  { id: 'fast-model',             credits: 'x0.34', free: false, note: 'Fast 别名' },
+  { id: 'kimi-k2.6',              credits: 'x0.52', free: false },
+  { id: 'balanced-model',         credits: 'x0.59', free: false, note: 'Balanced 别名' },
+  { id: 'glm-5.3',                credits: 'x0.69', free: false },
+  { id: 'kimi-k2.8-preview',      credits: 'x0.77', free: false },
+  { id: 'glm-5.2',                credits: 'x0.79', free: false },
+  { id: 'gemini-3.8-flash',       credits: 'x0.95', free: false },
+  { id: 'gemini-3.5-flash',       credits: 'x0.99', free: false },
+  { id: 'gpt-6.1-sol',            credits: 'x1.33', free: false },
+  { id: 'gpt-6-sol',              credits: 'x1.33', free: false },
+  { id: 'gpt-5.6-terra',          credits: 'x1.39', free: false },
+  { id: 'kimi-k3',                credits: 'x1.62', free: false },
+  { id: 'gpt-5.4',                credits: 'x1.65', free: false },
+  { id: 'grok-4.7',               credits: 'x1.90', free: false },
+  { id: 'primary-model',          credits: 'x3.31', free: false, note: 'Primary 别名' },
+  { id: 'gpt-5.5',                credits: 'x3.31', free: false },
+  { id: 'gpt-5.6-sol',            credits: 'x3.47', free: false },
+  { id: 'gpt-6-astra',            credits: 'x6.67', free: false },
+  { id: 'default-model',          credits: '',      free: false, note: 'Auto 别名, 由平台路由' },
+];
 const AUTH_DIR = path.join(os.homedir(), '.wb-proxy');
 const AUTH_FILE = process.env.WB_AUTH_FILE || path.join(AUTH_DIR, 'auth.json');
 
@@ -538,10 +564,10 @@ function serve(port, localKey, host = '127.0.0.1') {
       if (k !== localKey) return sendJson(res, 401, { error: { message: 'invalid local api key' } });
     }
     if (req.method === 'GET' && (url.pathname === '/v1/models' || url.pathname === '/models')) {
-      return sendJson(res, 200, { object: 'list', data: [
-        ...FREE_MODELS.map(id => ({ id, object: 'model', owned_by: 'workbuddy', free: true })),
-        ...PAID_MODELS.map(id => ({ id, object: 'model', owned_by: 'workbuddy', free: false })),
-      ] });
+      return sendJson(res, 200, { object: 'list', data: MODELS.map(m => ({
+        id: m.id, object: 'model', owned_by: 'workbuddy', free: m.free, credits: m.credits,
+        ...(m.note ? { note: m.note } : {}),
+      })) });
     }
     if (req.method === 'POST' && (url.pathname === '/v1/chat/completions' || url.pathname === '/chat/completions')) {
       return handleChat(req, res, await readAll(req));
