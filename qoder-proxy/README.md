@@ -81,6 +81,8 @@ curl http://127.0.0.1:8477/v1/chat/completions \
 - 登录态来自 Qoder IDE 本地凭证(`auth.v1.dat`,Electron safeStorage 加密,macOS 钥匙串取密钥按 Chromium safe_storage 算法解密);`dt-` 设备令牌直接构造 COSY 会话,`drt-` 刷新令牌用于过期续期
 - 设备指纹由账号 UID 单向哈希派生(稳定不漂移)
 - 上游 `agent_chat_generation` 仅支持流式,非流式由代理聚合;信封错误(418/429/5xx)自动退避重试
+- **必须用 `api2.qoder.sh` 网关**(官方客户端选举的推理入口);`api1` 网关上免费账号有每日次数限制(code 110)
+- 可选 IDE 通道: 用 dt- 设备令牌调 `/api/v1/me/jobToken` 换 24h 的 jt- 工作令牌(自动缓存续期),与官方客户端同配额通道
 
 ## 免责
 

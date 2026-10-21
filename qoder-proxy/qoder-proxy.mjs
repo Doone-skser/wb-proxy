@@ -103,7 +103,7 @@ function buildHeaders(sess, fp, pathSig, bodyStr, accept, extra = {}) {
 const USERINFO_URL = 'https://openapi.qoder.sh/api/v1/userinfo';
 const JOBTOKEN_URL = 'https://center.qoder.sh/algo/api/v3/user/jobToken?Encode=1';
 const MODEL_LIST_URL = 'https://api2.qoder.sh/algo/api/v2/model/list?Encode=1';
-const CHAT_URL = 'https://api1.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1';
+const CHAT_URL = 'https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1';
 const CHAT_PATH_SIG = '/api/v2/service/pro/sse/agent_chat_generation';
 const ML_PATH_SIG = '/api/v2/model/list';
 
@@ -195,6 +195,37 @@ async function exchangePAT(pat) {
 }
 
 // ======================== 上游会话 ========================
+// ======================== jobToken(IDE 通道) ========================
+// 抓包自 IDE 主进程: 用 dt- 设备令牌换一个 24h 的 jt- 工作令牌,走官方客户端配额通道
+const JOBTOKEN_MINT_URL = 'https://openapi.qoder.sh/api/v1/me/jobToken';
+const QODER_CLIENT_ID = '732aef47-9cf2-46a2-95fe-4cebb5d0d1fa';
+
+async function mintJobToken(ideToken) {
+  const resp = await fetch(JOBTOKEN_MINT_URL, {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + ideToken, 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ clientId: QODER_CLIENT_ID }),
+  });
+  if (!resp.ok) throw new Error('mint jobToken HTTP ' + resp.status + ': ' + (await resp.text()).slice(0, 200));
+  const j = await resp.json();
+  if (!j.token) throw new Error('mint jobToken: 响应无 token');
+  return { token: j.token, expiresAt: j.expires_at, refreshToken: j.refresh_token || '' };
+}
+
+// 取一个未过期的 jt-(过期前 10 分钟自动重签,结果缓存在 auth.json)
+async function getIDEChannelToken(force = false) {
+  const auth = loadAuth() || {};
+  const ideToken = auth.ideToken || auth.token;
+  if (!ideToken) return null;
+  if (!force && auth.jobToken && auth.jobTokenExpiresAt) {
+    const exp = Date.parse(auth.jobTokenExpiresAt);
+    if (exp && exp - Date.now() > 10 * 60 * 1000) return auth.jobToken;
+  }
+  const jt = await mintJobToken(ideToken);
+  saveAuth({ ...auth, jobToken: jt.token, jobTokenExpiresAt: jt.expiresAt, jobTokenRefresh: jt.refreshToken });
+  return jt.token;
+}
+
 let AUTH = null;       // {token, refreshToken}
 let IDENTITY = null;   // userinfo 派生
 let SESS = null;       // cosy session
@@ -205,32 +236,41 @@ async function initSession(forceRefresh = false) {
     AUTH = loadAuth();
     if (!AUTH || !AUTH.token) throw new Error('未找到凭证: 设 QODER_TOKEN 或先运行 `node qoder-proxy.mjs login`');
   }
-  if (forceRefresh && AUTH.refreshToken) AUTH = await refreshTokens(AUTH);
-  const resp = await fetch(USERINFO_URL, { headers: { authorization: 'Bearer ' + AUTH.token } });
-  if (resp.status === 401 && !forceRefresh && AUTH.refreshToken) return initSession(true);
-  if (!resp.ok) {
-    // PAT 通道的 jobToken 可能不能调 userinfo,用交换时存下的身份信息兜底
-    if (AUTH.uid) {
-      IDENTITY = {
-        name: AUTH.name || 'qoder-user', uid: AUTH.uid, organizationId: '',
-        userType: AUTH.userType || 'personal_standard',
-        securityOauthToken: AUTH.token, refreshToken: AUTH.refreshToken || '',
-      };
-      SESS = newSession(IDENTITY);
-      FP = fingerprint(AUTH.uid);
-      return { name: IDENTITY.name, id: AUTH.uid };
-    }
-    throw new Error('userinfo HTTP ' + resp.status);
+  // IDE 通道的"刷新"就是重新签 jt-,走下面;只有纯 PAT 通道才用旧交换端点
+  if (forceRefresh && AUTH.refreshToken && !AUTH.ideToken && !AUTH.token?.startsWith('dt-')) AUTH = await refreshTokens(AUTH);
+
+  // 优先走 IDE 通道: dt- 换 24h 的 jt-,配额与官方客户端同桶
+  let channelToken = AUTH.token;
+  if (!process.env.QODER_NO_IDE_CHANNEL && (AUTH.ideToken || AUTH.token?.startsWith('dt-'))) {
+    try {
+      const jt = await getIDEChannelToken(forceRefresh);
+      if (jt) { channelToken = jt; console.log('[auth] IDE 通道 jobToken 就绪'); }
+    } catch (e) { console.error('[auth] jobToken 签发失败,回退原通道:', e.message); }
   }
-  const ui = await resp.json();
-  IDENTITY = {
-    name: ui.name, uid: ui.id, organizationId: ui.organization_id || '',
-    userType: ui.userType || 'personal_standard',
-    securityOauthToken: AUTH.token, refreshToken: AUTH.refreshToken || '',
-  };
+
+  const resp = await fetch(USERINFO_URL, { headers: { authorization: 'Bearer ' + channelToken } });
+  if (resp.status === 401 && channelToken !== AUTH.token) {
+    // jt- 不能调 userinfo 属正常,用存下的身份兜底
+  } else if (resp.status === 401 && !forceRefresh && AUTH.refreshToken) return initSession(true);
+  else if (!resp.ok && !AUTH.uid) throw new Error('userinfo HTTP ' + resp.status);
+  if (resp.ok) {
+    const ui = await resp.json();
+    IDENTITY = {
+      name: ui.name, uid: ui.id, organizationId: ui.organization_id || '',
+      userType: ui.userType || 'personal_standard',
+      securityOauthToken: channelToken, refreshToken: AUTH.refreshToken || '',
+    };
+    FP = fingerprint(ui.id);
+  } else {
+    IDENTITY = {
+      name: AUTH.name || 'qoder-user', uid: AUTH.uid, organizationId: '',
+      userType: AUTH.userType || 'personal_standard',
+      securityOauthToken: channelToken, refreshToken: AUTH.refreshToken || '',
+    };
+    FP = fingerprint(AUTH.uid);
+  }
   SESS = newSession(IDENTITY);
-  FP = fingerprint(ui.id);
-  return ui;
+  return { name: IDENTITY.name, id: IDENTITY.uid };
 }
 
 // ======================== 模型目录 ========================
