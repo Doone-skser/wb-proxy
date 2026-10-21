@@ -4,6 +4,13 @@
 
 零依赖,只要 Node.js ≥ 18,单文件。
 
+## 姊妹项目:qoder-proxy
+
+[`qoder-proxy/`](qoder-proxy/) 用同样的思路反代 **Qoder**(阿里)账号里限时免费的
+DeepSeek-Flash / Qwen3.8-Flash,完整实现了 Qoder 的 COSY 协议(签名/加密会话)。
+另有 [`qoder-proxy/mux.mjs`](qoder-proxy/mux.mjs):单端口路径分发器,
+可让 wb-proxy 与 qoder-proxy 共用同一个对外端口(`/` → wb,`/qoder/` → qoder)。详见该目录 README。
+
 ## 模型列表
 
 `GET /v1/models` 返回 WorkBuddy 国际版完整目录(28 个模型),其中 `free: true` 的是限时免费:
