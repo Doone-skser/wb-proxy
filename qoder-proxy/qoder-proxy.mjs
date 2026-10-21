@@ -234,6 +234,56 @@ async function initSession(forceRefresh = false) {
 }
 
 // ======================== 模型目录 ========================
+// ======================== 每日签到(领 Credits) ========================
+// 国际版需要官方客户端真实设备指纹,macOS 上从本机 Qoder IDE 的缓存读取
+function ideFingerprint() {
+  try {
+    const umid = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.qoder/umid-cache.json'), 'utf8'));
+    const machineId = fs.readFileSync(path.join(os.homedir(), '.qoder/.auth/machine_id'), 'utf8').trim();
+    return {
+      machineId,
+      machineToken: umid.info.machineToken, machineType: umid.info.machineType,
+      machineCode: umid.info.machineCode || '',
+    };
+  } catch { return null; }
+}
+
+async function checkin() {
+  const auth = loadAuth();
+  const dt = auth?.ideToken || auth?.token;
+  if (!dt) throw new Error('无凭证');
+  const fp = ideFingerprint();
+  const headers = {
+    'authorization': 'Bearer ' + dt, 'accept': 'application/json',
+    'accept-language': 'zh-CN', 'user-agent': 'Qoder', 'cosy-clienttype': '10',
+  };
+  if (fp) {
+    headers['cosy-version'] = '0.4.4';
+    headers['cosy-machineid'] = fp.machineId;
+    headers['cosy-machinetoken'] = fp.machineToken;
+    headers['cosy-machinetype'] = fp.machineType;
+    if (fp.machineCode) headers['cosy-machinecode'] = fp.machineCode;
+    headers['cosy-machinehostname'] = 'localhost';
+    headers['cosy-machineos'] = 'aarch64_darwin';
+  }
+  const base = 'https://openapi.qoder.sh';
+  const listResp = await fetch(base + '/sash/api/v1/me/campaigns', { headers });
+  if (!listResp.ok) throw new Error('查询活动 HTTP ' + listResp.status);
+  const list = await listResp.json();
+  const target = (list.campaigns || []).find(c => c.actionType === 'CLAIM_BENEFIT' && c.claimStatus === 'CLAIMABLE');
+  if (!target) {
+    const claimed = (list.campaigns || []).some(c => c.actionType === 'CLAIM_BENEFIT' && c.claimStatus === 'CLAIMED');
+    return { status: claimed ? 'already_claimed' : 'no_campaign' };
+  }
+  const claimResp = await fetch(`${base}/sash/api/v1/me/campaigns/${target.campaignId}/claim`, { method: 'POST', headers });
+  if (!claimResp.ok) throw new Error('领取 HTTP ' + claimResp.status + ': ' + (await claimResp.text()).slice(0, 200));
+  const j = await claimResp.json();
+  return {
+    status: j.replayed ? 'already_claimed' : 'claimed',
+    amount: j.benefit?.amount, expiresAt: j.validity ? j.expiresAt : undefined,
+  };
+}
+
 const FALLBACK_MODELS = [
   { key: 'dfmodel', display_name: 'DeepSeek-Flash', is_reasoning: true, price_factor: 0, enable: true },
   { key: 'qfmodel', display_name: 'Qwen3.8-Flash', is_reasoning: true, price_factor: 0, enable: true },
@@ -680,7 +730,8 @@ if (cmd === 'serve') {
   if (pat) {
     try {
       const a = await exchangePAT(pat);
-      saveAuth(a);
+      const prev = loadAuth() || {};
+      saveAuth({ ...prev, ...a }); // 保留 ideToken 等字段
       console.log('PAT 登录成功 →', AUTH_FILE, `(${a.name || a.uid})`);
     } catch (e) {
       console.error('PAT 交换失败:', e.message);
@@ -688,7 +739,8 @@ if (cmd === 'serve') {
     }
   } else try {
     const a = importFromIDE();
-    saveAuth(a);
+    const prev = loadAuth() || {};
+    saveAuth({ ...prev, ...a, ideToken: a.token, ideRefreshToken: a.refreshToken });
     console.log('已从本机 Qoder IDE 导入登录态 →', AUTH_FILE);
   } catch (e) {
     console.error('导入失败:', e.message);
@@ -696,6 +748,8 @@ if (cmd === 'serve') {
     console.error('或用 PAT 登录: node qoder-proxy.mjs login --pat <你的PAT>');
     process.exit(1);
   }
+} else if (cmd === 'checkin') {
+  checkin().then(r => console.log(JSON.stringify(r))).catch(e => { console.error('签到失败:', e.message); process.exit(1); });
 } else if (cmd === 'models') {
   const raw = ARGS.includes('--raw');
   initSession().then(async () => {
