@@ -48,9 +48,9 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 function fingerprint(uid) {
   const m = s => crypto.createHash('md5').update(s).digest('hex');
   return {
-    machineId: m('machine:' + uid),
-    machineType: m('machinetype:' + uid).slice(0, 18),
-    machineToken: crypto.createHash('sha512').update('machinetoken:' + uid).digest('base64url').slice(0, 43),
+    machineId: process.env.QODER_MACHINE_ID || m('machine:' + uid),
+    machineType: process.env.QODER_MACHINE_TYPE || m('machinetype:' + uid).slice(0, 18),
+    machineToken: process.env.QODER_MACHINE_TOKEN || crypto.createHash('sha512').update('machinetoken:' + uid).digest('base64url').slice(0, 43),
   };
 }
 
@@ -165,6 +165,35 @@ async function refreshTokens(auth) {
   return out;
 }
 
+// PAT → jobToken 交换(Personal Access Token 通道,与 IDE 设备令牌不同配额桶)
+async function exchangePAT(pat) {
+  const date = new Date().toUTCString();
+  const sig = md5hex(APP_CODE + '&' + SECRET_B64 + '&' + date);
+  const inner = JSON.stringify({
+    personalToken: pat, securityOauthToken: '', refreshToken: '', needRefresh: false, authInfo: {},
+  });
+  const body = cosyEncode(Buffer.from(JSON.stringify({ payload: inner, encodeVersion: '1' })));
+  const fp = fingerprint('cred:' + pat);
+  const resp = await fetch(JOBTOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'cosy-machinetoken': fp.machineToken, 'cosy-machinetype': fp.machineType,
+      'login-version': 'v2', 'appcode': APP_CODE, 'accept': 'application/json',
+      'accept-encoding': 'identity', 'cosy-version': COSY_VERSION, 'cosy-clienttype': '5',
+      'date': date, 'signature': sig, 'content-type': 'application/json',
+      'cosy-machineid': fp.machineId, 'user-agent': 'Go-http-client/2.0',
+    },
+    body,
+  });
+  if (!resp.ok) throw new Error('PAT exchange HTTP ' + resp.status + ': ' + (await resp.text()).slice(0, 300));
+  const j = await resp.json();
+  if (!j.securityOauthToken) throw new Error('PAT exchange: 响应缺少 securityOauthToken: ' + JSON.stringify(j).slice(0, 300));
+  return {
+    token: j.securityOauthToken, refreshToken: j.refreshToken || '',
+    name: j.name || '', uid: j.id || '', userType: j.userType || 'personal_standard',
+  };
+}
+
 // ======================== 上游会话 ========================
 let AUTH = null;       // {token, refreshToken}
 let IDENTITY = null;   // userinfo 派生
@@ -179,7 +208,20 @@ async function initSession(forceRefresh = false) {
   if (forceRefresh && AUTH.refreshToken) AUTH = await refreshTokens(AUTH);
   const resp = await fetch(USERINFO_URL, { headers: { authorization: 'Bearer ' + AUTH.token } });
   if (resp.status === 401 && !forceRefresh && AUTH.refreshToken) return initSession(true);
-  if (!resp.ok) throw new Error('userinfo HTTP ' + resp.status);
+  if (!resp.ok) {
+    // PAT 通道的 jobToken 可能不能调 userinfo,用交换时存下的身份信息兜底
+    if (AUTH.uid) {
+      IDENTITY = {
+        name: AUTH.name || 'qoder-user', uid: AUTH.uid, organizationId: '',
+        userType: AUTH.userType || 'personal_standard',
+        securityOauthToken: AUTH.token, refreshToken: AUTH.refreshToken || '',
+      };
+      SESS = newSession(IDENTITY);
+      FP = fingerprint(AUTH.uid);
+      return { name: IDENTITY.name, id: AUTH.uid };
+    }
+    throw new Error('userinfo HTTP ' + resp.status);
+  }
   const ui = await resp.json();
   IDENTITY = {
     name: ui.name, uid: ui.id, organizationId: ui.organization_id || '',
@@ -634,13 +676,24 @@ if (cmd === 'serve') {
   const key = argVal('key', process.env.QODER_PROXY_KEY || '');
   serve(port, host, key).catch(e => { console.error('启动失败:', e.message); process.exit(1); });
 } else if (cmd === 'login') {
-  try {
+  const pat = argVal('pat', '');
+  if (pat) {
+    try {
+      const a = await exchangePAT(pat);
+      saveAuth(a);
+      console.log('PAT 登录成功 →', AUTH_FILE, `(${a.name || a.uid})`);
+    } catch (e) {
+      console.error('PAT 交换失败:', e.message);
+      process.exit(1);
+    }
+  } else try {
     const a = importFromIDE();
     saveAuth(a);
     console.log('已从本机 Qoder IDE 导入登录态 →', AUTH_FILE);
   } catch (e) {
     console.error('导入失败:', e.message);
     console.error('也可以手动创建', AUTH_FILE, '内容: {"token":"dt-...","refreshToken":"drt-..."}');
+    console.error('或用 PAT 登录: node qoder-proxy.mjs login --pat <你的PAT>');
     process.exit(1);
   }
 } else if (cmd === 'models') {
