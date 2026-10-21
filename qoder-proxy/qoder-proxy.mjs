@@ -365,6 +365,22 @@ async function getModels() {
 // 推理档位: 模型名后缀 ":max/:high/:medium/:low/:xhigh/:off",或请求体 reasoning_effort
 const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const DEFAULT_EFFORT = 'max'; // 默认开思考 + max 档
+// 各模型实际支持的档位(来自上游目录 thinking_config);不在表内的模型不做校验
+const EFFORT_SUPPORT = {
+  dfmodel: new Set(['low', 'high', 'max']),
+  qfmodel: new Set(['low', 'medium', 'xhigh']),
+};
+// 请求的档位映射到该模型支持的档位: xhigh→max(DS 系), max→xhigh(qwen 系), 其余不支持→默认
+function clampEffort(modelKey, effort) {
+  if (!effort || effort === 'off') return effort;
+  const supported = EFFORT_SUPPORT[modelKey];
+  if (!supported || supported.has(effort)) return effort;
+  if (effort === 'xhigh' && supported.has('max')) return 'max';
+  if (effort === 'max' && supported.has('xhigh')) return 'xhigh';
+  if (effort === 'medium' && supported.has('high')) return 'high';
+  if (effort === 'high' && supported.has('medium')) return 'medium';
+  return DEFAULT_EFFORT;
+}
 
 function resolveModel(requested, models) {
   let r = (requested || 'default').trim();
@@ -618,6 +634,7 @@ async function handleChatCompletions(req, res, body) {
     if (rl === 'none' || rl === 'off' || rl === 'disable' || rl === 'disabled') effort = 'off';
     else if (VALID_EFFORTS.has(rl)) effort = rl;
   }
+  effort = clampEffort(modelKey, effort);
   const messages = convertMessages(r.messages);
   const tools = Array.isArray(r.tools) && r.tools.length ? r.tools : null;
   const isStream = r.stream === true;
