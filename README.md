@@ -1,8 +1,21 @@
-# wb-proxy — WorkBuddy 免费大模型反代
+# wb-proxy — WorkBuddy / Qoder 免费大模型反代
 
-把 WorkBuddy(腾讯)账号里限时免费的大模型反代成 OpenAI 兼容接口,供任意 AI 工具使用。
+把 WorkBuddy(腾讯)和 Qoder(阿里)账号里限时免费的大模型反代成 OpenAI 兼容接口,供任意 AI 工具使用。
 
 零依赖,只要 Node.js ≥ 18,单文件。
+
+## 免费模型一览
+
+| 来源 | 模型 id | 说明 | 免费截止 |
+|---|---|---|---|
+| WorkBuddy | `deepseek-v4.1-flash` | DeepSeek 旗舰,1M 上下文,多模态,支持工具调用 | 2026-11-01 |
+| WorkBuddy | `hy3` | 腾讯混元思考模型 | 2026-11-01 |
+| WorkBuddy | `step-5-preview` | 阶跃星辰旗舰 | 2026-10-26 |
+| Qoder | `deepseek-v4.1-flash-1017` | DeepSeek-Flash(上游 `dfmodel`),带推理 | 限时免费 |
+| Qoder | `qwen3.8-flash` | Qwen3.8-Flash(上游 `qfmodel`),带推理 | 限时免费 |
+
+> 免费窗口以各平台账号内的实际促销为准,随时可能变化。
+> 两个代理的 `/v1/models` 都会实时反映当前可用状态。
 
 ## 姊妹项目:qoder-proxy
 
@@ -11,7 +24,7 @@ DeepSeek-Flash / Qwen3.8-Flash,完整实现了 Qoder 的 COSY 协议(签名/加�
 另有 [`qoder-proxy/mux.mjs`](qoder-proxy/mux.mjs):单端口路径分发器,
 可让 wb-proxy 与 qoder-proxy 共用同一个对外端口(`/` → wb,`/qoder/` → qoder)。详见该目录 README。
 
-## 模型列表
+## 模型列表(WorkBuddy)
 
 `GET /v1/models` 返回 WorkBuddy 国际版完整目录(28 个模型),其中 `free: true` 的是限时免费:
 
