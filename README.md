@@ -11,7 +11,7 @@
 | WorkBuddy | `deepseek-v4.1-flash` | DeepSeek 旗舰,1M 上下文,多模态,支持工具调用 | 2026-11-01 |
 | WorkBuddy | `hy3` | 腾讯混元思考模型 | 2026-11-01 |
 | WorkBuddy | `step-5-preview` | 阶跃星辰旗舰 | 2026-10-26 |
-| Qoder | `deepseek-v4.1-flash-1017` | DeepSeek-Flash(上游 `dfmodel`),带推理 | 限时免费 |
+| Qoder | `deepseek-v4.1-flash-1017` | DeepSeek-Flash(上游 `dfmodel`),带推理 | 2026-10-25 |
 | Qoder | `qwen3.8-flash` | Qwen3.8-Flash(上游 `qfmodel`),带推理 | 限时免费 |
 
 > 免费窗口以各平台账号内的实际促销为准,随时可能变化。

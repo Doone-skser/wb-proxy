@@ -45,10 +45,13 @@ chmod 600 ~/.qoder-proxy/auth.json
 
 `GET /v1/models` 返回账号当前完整目录。免费模型(`free: true`):
 
-| 模型 key | 别名(都指向它) | 说明 |
-|---|---|---|
-| `dfmodel` | `deepseek` / `deepseek-flash` / `deepseek-v4.1-flash` / `ds` / `auto` / `default` | DeepSeek-Flash,限时免费 |
-| `qfmodel` | `qwen` / `qwen-flash` / `qwen3.8-flash` | Qwen3.8-Flash,限时免费 |
+| 模型 key | 别名(都指向它) | 说明 | 免费截止 |
+|---|---|---|---|
+| `dfmodel` | `deepseek` / `deepseek-v4.1-flash-1017` / `ds` / `auto` / `default` | DeepSeek-Flash(V4.1-Flash-1017),带推理,max 档 | 2026-10-25 |
+| `qfmodel` | `qwen` / `qwen3.8-flash` | Qwen3.8-Flash,带推理,medium 档 | 限时免费 |
+
+> 签到每天可领 100 Credits(30 天有效,全模型可用),跑 `node qoder-proxy.mjs checkin`;
+> 有 Credits 后 0.1 费率的模型(`gfmodel`/`qmodel`/`mmodel`)也可用。
 
 请求里的 `model` 字段填上游 key 或别名均可;不传默认 `dfmodel`。
 
@@ -81,8 +84,25 @@ curl http://127.0.0.1:8477/v1/chat/completions \
 - 登录态来自 Qoder IDE 本地凭证(`auth.v1.dat`,Electron safeStorage 加密,macOS 钥匙串取密钥按 Chromium safe_storage 算法解密);`dt-` 设备令牌直接构造 COSY 会话,`drt-` 刷新令牌用于过期续期
 - 设备指纹由账号 UID 单向哈希派生(稳定不漂移)
 - 上游 `agent_chat_generation` 仅支持流式,非流式由代理聚合;信封错误(418/429/5xx)自动退避重试
-- **必须用 `api2.qoder.sh` 网关**(官方客户端选举的推理入口);`api1` 网关上免费账号有每日次数限制(code 110)
-- 可选 IDE 通道: 用 dt- 设备令牌调 `/api/v1/me/jobToken` 换 24h 的 jt- 工作令牌(自动缓存续期),与官方客户端同配额通道
+
+## 通道说明(重要)
+
+Qoder 有两套推理网关,免费账号待遇不同:
+
+| 网关 | 说明 |
+|---|---|
+| `api2.qoder.sh` | **官方客户端选举的推理入口**,免费账号正常使用,无每日次数限制 ✅ 本代理默认 |
+| `api1.qoder.sh` | 第三方客户端常用入口,免费账号有**每日次数限制**(超限报 `403 code 110 "Billing daily count exceeded"`)⚠️ |
+
+认证令牌有三个层级,本代理自动处理:
+
+| 令牌 | 有效期 | 用途 |
+|---|---|---|
+| `dt-` 设备令牌 | ~30 天 | 登录态本体,从 IDE 导入 |
+| `drt-` 刷新令牌 | ~1 年 | dt- 过期后续期 |
+| `jt-` 工作令牌 | 24 小时 | IDE 通道凭证,启动时用 dt- 调 `/api/v1/me/jobToken` 现签,自动缓存续期 |
+
+签到领的 Credits(每天 100,30 天有效)在所有通道通用。
 
 ## 免责
 
