@@ -52,6 +52,20 @@ chmod 600 ~/.qoder-proxy/auth.json
 
 请求里的 `model` 字段填上游 key 或别名均可;不传默认 `dfmodel`。
 
+### 推理档位(思考开关)
+
+默认**开启思考并跑 `max` 档**。两种控制方式:
+
+```bash
+# 方式一: 模型名后缀
+"model": "deepseek-v4.1-flash-1017:low"     # low / medium / high / xhigh / max / off
+# 方式二: OpenAI 风格字段
+"reasoning_effort": "low"                    # 或 "reasoning": {"effort": "low"}
+```
+
+后缀优先级高于请求体字段。注意:`off` 只是尽力压制(实测上游对免费模型强制保留少量思考),
+要最快响应用 `:low`。
+
 ```bash
 curl http://127.0.0.1:8477/v1/chat/completions \
   -H 'Content-Type: application/json' \

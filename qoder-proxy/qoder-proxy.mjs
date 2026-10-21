@@ -230,11 +230,22 @@ async function getModels() {
   return FALLBACK_MODELS;
 }
 
+// 推理档位: 模型名后缀 ":max/:high/:medium/:low/:xhigh/:off",或请求体 reasoning_effort
+const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const DEFAULT_EFFORT = 'max'; // 默认开思考 + max 档
+
 function resolveModel(requested, models) {
-  const r = (requested || 'default').trim();
+  let r = (requested || 'default').trim();
+  let effort = null;
+  const ci = r.lastIndexOf(':');
+  if (ci > 0) {
+    const suffix = r.slice(ci + 1).toLowerCase();
+    if (suffix === 'off' || suffix === 'no-think' || suffix === 'nothink') { effort = 'off'; r = r.slice(0, ci); }
+    else if (VALID_EFFORTS.has(suffix)) { effort = suffix; r = r.slice(0, ci); }
+  }
   const key = MODEL_ALIASES[r.toLowerCase()] || r;
   const info = models.find(m => m.key === key);
-  return { key, info: info || { key, display_name: key, is_reasoning: true, price_factor: 0, enable: true } };
+  return { key, effort, info: info || { key, display_name: key, is_reasoning: true, price_factor: 0, enable: true } };
 }
 
 // ======================== 消息转换 ========================
@@ -318,9 +329,11 @@ function latestUserPrompt(messages) {
 }
 
 // ======================== 上游调用 ========================
-function buildUpstreamBody(modelKey, modelInfo, messages, tools, maxTokens) {
+function buildUpstreamBody(modelKey, modelInfo, messages, tools, maxTokens, effort) {
   const prompt = latestUserPrompt(messages);
   const nid = uuid();
+  const thinking = effort !== 'off';
+  const eff = thinking ? (effort || DEFAULT_EFFORT) : 'none';
   const body = {
     request_id: nid, request_set_id: uuid(), chat_record_id: nid,
     stream: true, chat_task: 'FREE_INPUT',
@@ -328,7 +341,7 @@ function buildUpstreamBody(modelKey, modelInfo, messages, tools, maxTokens) {
       chatPrompt: '',
       extra: {
         context: [],
-        modelConfig: { is_reasoning: !!modelInfo.is_reasoning, key: modelKey },
+        modelConfig: { is_reasoning: thinking, key: modelKey, ...(eff ? { effort: eff } : {}) },
         originalContent: { type: 'text', text: prompt },
       },
       features: [], imageUrls: null, text: { type: 'text', text: prompt },
@@ -340,9 +353,10 @@ function buildUpstreamBody(modelKey, modelInfo, messages, tools, maxTokens) {
     session_type: 'qoder', agent_id: 'agent_common', task_id: 'common',
     model_config: {
       key: modelKey, display_name: modelInfo.display_name || modelKey, model: '',
-      format: 'openai', is_vl: false, is_reasoning: !!modelInfo.is_reasoning,
+      format: 'openai', is_vl: false, is_reasoning: thinking,
       api_key: '', url: '', source: 'system',
       max_input_tokens: modelInfo.max_input_tokens || 180000,
+      ...(eff ? { effort: eff } : {}),
     },
     messages,
   };
@@ -357,8 +371,8 @@ const isTransient = (status, detail) =>
   status === 418 || status === 429 || status >= 500 || /provider_error|rate.?limit|timeout/i.test(detail || '');
 
 // 流式调用上游,逐 delta 回调。返回 {usage}
-async function callUpstream(modelKey, modelInfo, messages, tools, maxTokens, onDelta) {
-  const body = buildUpstreamBody(modelKey, modelInfo, messages, tools, maxTokens);
+async function callUpstream(modelKey, modelInfo, messages, tools, maxTokens, effort, onDelta) {
+  const body = buildUpstreamBody(modelKey, modelInfo, messages, tools, maxTokens, effort);
   const bodyStr = cosyEncode(Buffer.from(JSON.stringify(body)));
   const maxRetries = 2;
   let lastErr = null;
@@ -462,14 +476,23 @@ async function handleChatCompletions(req, res, body) {
   let r;
   try { r = JSON.parse(body); } catch { return jsonErr(res, 400, 'invalid JSON body'); }
   const models = await getModels();
-  const { key: modelKey, info: modelInfo } = resolveModel(r.model, models);
+  const { key: modelKey, effort: modelEffort, info: modelInfo } = resolveModel(r.model, models);
+  // 档位优先级: 模型名后缀 > reasoning_effort / reasoning.effort > 默认 max
+  let effort = modelEffort;
+  if (!effort) {
+    const re = (typeof r.reasoning_effort === 'string' && r.reasoning_effort)
+      || (r.reasoning && typeof r.reasoning.effort === 'string' && r.reasoning.effort) || '';
+    const rl = re.toLowerCase();
+    if (rl === 'none' || rl === 'off' || rl === 'disable' || rl === 'disabled') effort = 'off';
+    else if (VALID_EFFORTS.has(rl)) effort = rl;
+  }
   const messages = convertMessages(r.messages);
   const tools = Array.isArray(r.tools) && r.tools.length ? r.tools : null;
   const isStream = r.stream === true;
   const reqId = 'chatcmpl-' + crypto.randomBytes(12).toString('hex');
   const created = unixSec();
   const t0 = Date.now();
-  console.log(`[chat] model=${r.model || 'default'}->${modelKey} stream=${isStream} msgs=${messages.length} tools=${tools ? tools.length : 0}`);
+  console.log(`[chat] model=${r.model || 'default'}->${modelKey} effort=${effort || DEFAULT_EFFORT} stream=${isStream} msgs=${messages.length} tools=${tools ? tools.length : 0}`);
 
   if (isStream) {
     res.writeHead(200, {
@@ -479,7 +502,7 @@ async function handleChatCompletions(req, res, body) {
     const send = obj => res.write('data: ' + JSON.stringify(obj) + '\n\n');
     let sawToolCalls = false, usage = null;
     try {
-      const out = await callUpstream(modelKey, modelInfo, messages, tools, r.max_tokens, d => {
+      const out = await callUpstream(modelKey, modelInfo, messages, tools, r.max_tokens, effort, d => {
         const delta = {};
         if (d.role) delta.role = d.role;
         if (d.reasoning) delta.reasoning_content = d.reasoning;
@@ -505,7 +528,7 @@ async function handleChatCompletions(req, res, body) {
     let full = '', reasoning = '';
     const toolFrags = new Map(); // index -> 合并中的 tool_call
     try {
-      const out = await callUpstream(modelKey, modelInfo, messages, tools, r.max_tokens, d => {
+      const out = await callUpstream(modelKey, modelInfo, messages, tools, r.max_tokens, effort, d => {
         if (d.content) full += d.content;
         if (d.reasoning) reasoning += d.reasoning;
         if (d.toolCalls) {
@@ -621,7 +644,15 @@ if (cmd === 'serve') {
     process.exit(1);
   }
 } else if (cmd === 'models') {
-  initSession().then(getModels).then(ms => {
+  const raw = ARGS.includes('--raw');
+  initSession().then(async () => {
+    if (raw) {
+      const h = buildHeaders(SESS, FP, ML_PATH_SIG, '', 'application/json');
+      const resp = await fetch(MODEL_LIST_URL, { headers: h });
+      console.log(JSON.stringify(await resp.json(), null, 2));
+      return;
+    }
+    const ms = await getModels();
     for (const m of ms) console.log(`${m.key}\t${m.display_name}\tfree=${m.price_factor === 0 && m.enable}\tprice=${m.price_factor}\treasoning=${m.is_reasoning}`);
   }).catch(e => { console.error(e.message); process.exit(1); });
 } else {
